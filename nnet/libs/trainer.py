@@ -360,11 +360,13 @@ class SiSnrTrainer(Trainer):
         snr_loss = (-0.8*th.sum(snr1)-0.1*th.sum(snr2)-0.1*th.sum(snr3)) / N
  
         ce = th.nn.CrossEntropyLoss()
-        ce_loss = th.sum(ce(spk_pred, egs["spk_idx"])) / N
+        #ce_loss = th.sum(ce(spk_pred, egs["spk_idx"])) / N
+        ce_loss = ce(spk_pred, egs["spk_idx"])
         #sisnr_mat = th.stack(
         #    [sisnr_loss(p) for p in permutations(range(num_spks))])
         #max_perutt, _ = th.max(sisnr_mat, dim=0)
         # si-snr
         #return -th.sum(max_perutt) / N
         #return 0.8 * snr_loss + 0.2 * ce_loss
-        return snr_loss + 10 * ce_loss
+        #return snr_loss + 10 * ce_loss
+        return snr_loss + 0.5 * ce_loss
