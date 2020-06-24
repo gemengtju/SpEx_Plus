@@ -20,6 +20,7 @@ nnet_conf = {
 # data configure:
 train_dir = "data/wsj0_2mix/tr/"
 dev_dir = "data/wsj0_2mix/cv/"
+spk_list = "data/wsj0_2mix_extr_tr.spk"
 
 train_data = {
     "mix_scp":
@@ -28,6 +29,7 @@ train_data = {
     train_dir + "ref.scp",
     "aux_scp":
     train_dir + "aux.scp",
+    "spk_list": spk_list,
     "sample_rate":
     fs,
 }
@@ -39,6 +41,7 @@ dev_data = {
     dev_dir + "ref.scp",
     "aux_scp":
     dev_dir + "aux.scp",
+    "spk_list": spk_list,
     "sample_rate": fs,
 }
 
