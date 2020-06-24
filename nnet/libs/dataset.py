@@ -8,9 +8,6 @@ from torch.nn.utils.rnn import pad_sequence
 from .kaldi_io import read_vec_flt, read_mat
 from .audio import WaveReader
 
-#from pudb import set_trace
-#set_trace()
-
 def make_dataloader(train=True,
                     data_kwargs=None,
                     num_workers=4,
@@ -23,31 +20,19 @@ def make_dataloader(train=True,
                       batch_size=batch_size,
                       num_workers=num_workers)
 
-def get_spk_ivec(key):
-    '''
-      409o030h_1.7445_029o0304_-1.7445_409c0211
-    '''
-    spk = key.split('_')[-1][0:3]
-    print(spk)
-
-
-
 class Dataset(object):
     """
     Per Utterance Loader
     """
-    def __init__(self, mix_scp="", ref_scp=None, aux_scp=None, sample_rate=8000):
+    def __init__(self, mix_scp="", ref_scp=None, aux_scp=None, spk_list=None, sample_rate=8000):
         self.mix = WaveReader(mix_scp, sample_rate=sample_rate)
         self.ref = WaveReader(ref_scp, sample_rate=sample_rate)
         self.aux = WaveReader(aux_scp, sample_rate=sample_rate)
-        #self.aux = WaveReader("/export/home/clx214/gm/ntu_project/SpEx/exp/ivectors_wsj8k_train_cv_wsj8k_all/spk_ivector.scp", sample_rate=sample_rate)
-        self.ref_dur = WaveReader("/export/home/clx214/gm/ntu_project/SpEx_SincNetAuxEncoder/uniq_target_ref_dur.txt", sample_rate=sample_rate)
+        # If use WSJ0-2mix data (min version), don't need this part
+        self.ref_dur = WaveReader("data/uniq_target_ref_dur.txt", sample_rate=sample_rate)
         self.sample_rate = sample_rate
-        #self.mfcc = WaveReader("/export/home/clx214/gm/ntu_project/SpEx/data/wsj8k_all/select_feats_delta.scp", sample_rate=sample_rate)
-        #self.cmvn = np.load("/export/home/clx214/gm/ntu_project/SpEx2/data/tr_cmvn.npz")
-        #self.mean = self.cmvn['mean_inputs']
-        #self.std = self.cmvn['stddev_inputs']
-        self.spk_list = self._load_spk("/export/home/clx214/gm/ntu_project/SpEx_SincNetAuxEncoder/data/wsj0_2mix_extr_tr.spk")
+        self.spk_list = self._load_spk(spk_list)
+        print(self.spk_list)
 
     def _load_spk(self, spk_list_path):
         if spk_list_path is None:
@@ -75,13 +60,9 @@ class Dataset(object):
         spk_idx = self.spk_list.index(key.split('_')[-1][0:3])
         return {
             "mix": mix[:end_idx].astype(np.float32),
-            #"mix": mix.astype(np.float32),
             "ref": ref[:end_idx].astype(np.float32),
-            #"ref": ref.astype(np.float32),
             "aux": aux.astype(np.float32),
             "aux_len": len(aux),
-            #"aux_mfcc": aux_mfcc_cmvn.astype(np.float32),
-            #"aux_mfcc_len": aux_mfcc_cmvn.shape[0],
             "spk_idx": spk_idx
         }
 
@@ -106,8 +87,6 @@ class ChunkSplitter(object):
         chunk["ref"] = eg["ref"][s:s + self.chunk_size]
         chunk["aux"] = eg["aux"]
         chunk["aux_len"] = eg["aux_len"]
-        #chunk["aux_mfcc"] = eg["aux_mfcc"]
-        #chunk["aux_mfcc_len"] = eg["aux_mfcc_len"]
         chunk["valid_len"] = int(self.chunk_size)
         chunk["spk_idx"] = eg["spk_idx"]
         return chunk
@@ -126,8 +105,6 @@ class ChunkSplitter(object):
             chunk["ref"] = np.pad(eg["ref"], (0, P), "constant")
             chunk["aux"] = eg["aux"]
             chunk["aux_len"] = eg["aux_len"]
-            #chunk["aux_mfcc"] = eg["aux_mfcc"]
-            #chunk["aux_mfcc_len"] = eg["aux_mfcc_len"]
             chunk["valid_len"] = int(N)
             chunk["spk_idx"] = eg["spk_idx"]
             chunks.append(chunk)
@@ -185,7 +162,6 @@ class DataLoader(object):
         for idx in range(len(chunk_list)):
             P = max_len - len(chunk_list[idx]["aux"])
             chunk_list[idx]["aux"] = np.pad(chunk_list[idx]["aux"], (0, P), "constant")
-            #print(type(chunk_list[idx]["aux_mfcc"]))
 
         return chunk_list
 
