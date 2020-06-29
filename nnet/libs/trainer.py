@@ -323,31 +323,12 @@ class SiSnrTrainer(Trainer):
         return ret
 
     def compute_loss(self, egs):
-        # flatten for parallel module
-        #self.nnet.flatten_parameters()
-        # spks x n x S
-        #print(egs["aux_mfcc"].size())
-        #print(egs["aux_mfcc_len"])
-        #print(egs["aux"].size())
         ests, ests2, ests3, spk_pred = th.nn.parallel.data_parallel(
             self.nnet, (egs["mix"], egs["aux"], egs["aux_len"]), device_ids=self.gpuid)
-        # spks x n x S
         refs = egs["ref"]
-        #print("*****************TTTTT")
-        #print(ests.size())
-        #print(ests2.size())
-        #print(ests3.size())
-
-        #def sisnr_loss(permute):
-        #    # for one permute
-        #    return sum(
-        #        [self.sisnr(ests[s], refs[t])
-        #         for s, t in enumerate(permute)]) / len(permute)
 
         ## P x N
         N = egs["mix"].size(0)
-        #ref_len = egs["ref"].size(1)
-        #print(ref_len)
         valid_len = egs["valid_len"]
         ests = self.mask_by_length(ests, valid_len)
         ests2 = self.mask_by_length(ests2, valid_len)
@@ -360,11 +341,5 @@ class SiSnrTrainer(Trainer):
         snr_loss = (-0.8*th.sum(snr1)-0.1*th.sum(snr2)-0.1*th.sum(snr3)) / N
  
         ce = th.nn.CrossEntropyLoss()
-        ce_loss = th.sum(ce(spk_pred, egs["spk_idx"])) / N
-        #sisnr_mat = th.stack(
-        #    [sisnr_loss(p) for p in permutations(range(num_spks))])
-        #max_perutt, _ = th.max(sisnr_mat, dim=0)
-        # si-snr
-        #return -th.sum(max_perutt) / N
-        #return 0.8 * snr_loss + 0.2 * ce_loss
-        return snr_loss + 10 * ce_loss
+        ce_loss = ce(spk_pred, egs["spk_idx"])
+        return snr_loss + 0.5 * ce_loss

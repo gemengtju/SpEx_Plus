@@ -1,10 +1,6 @@
 import torch as th
 import torch.nn as nn
-
 import torch.nn.functional as F
-from sincnet import SincConv_fast
-#from pudb import set_trace
-#set_trace()
 
 
 def param(nnet, Mb=True):
@@ -239,26 +235,6 @@ class Conv1DBlock_v2(nn.Module):
         x = x + y
         return x
 
-#### SincNet part ####
-class Sinc_Conv1D(nn.Module):
-    """
-    1D sincnet conv in ConvTasNet
-    """
-
-    def __init__(self, in_channels=1, out_channels=256, kernel_size=20, stride=10, padding=0):
-        super(Sinc_Conv1D, self).__init__()
-        self.sinc_conv1d = SincConv_fast(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding)
-
-    def forward(self, x):
-        """
-        x: N x L or N x C x L
-        """
-        if x.dim() not in [2, 3]:
-            raise RuntimeError("{} accept 2/3D tensor as input".format(
-                self.__name__))
-        x = self.sinc_conv1d(x if x.dim() == 3 else th.unsqueeze(x, 1))
-        return x
-
 class ResBlock(nn.Module):
     """
     ref to 
@@ -318,6 +294,8 @@ class ConvTasNet(nn.Module):
                                format(non_linear))
         self.non_linear_type = non_linear
         self.non_linear = supported_nonlinear[non_linear]
+        
+        # Multi-scale Encoder
         # n x S => n x N x T, S = 4s*8000 = 32000
         self.L1 = L
         self.L2 = 80
@@ -329,11 +307,11 @@ class ConvTasNet(nn.Module):
         # T = int((xlen - L) / (L // 2)) + 1
         # before repeat blocks, always cLN
         self.ln = ChannelWiseLayerNorm(3*N)
-        #self.ln_2 = ChannelWiseLayerNorm(N)
-        #self.ln_3 = ChannelWiseLayerNorm(N)
         # n x N x T => n x B x T
         self.proj = Conv1D(3*N, B, 1)
-        
+       
+        # Repeat Conv Blocks 
+        # n x B x T => n x B x T
         self.conv_block_1 = Conv1DBlock_v2(spk_embed_dim=256, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal, dilation=1)
         self.conv_block_1_other = self._build_blocks(num_blocks=X, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal)
         self.conv_block_2 = Conv1DBlock_v2(spk_embed_dim=256, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal, dilation=1)
@@ -342,18 +320,8 @@ class ConvTasNet(nn.Module):
         self.conv_block_3_other = self._build_blocks(num_blocks=X, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal)
         self.conv_block_4 = Conv1DBlock_v2(spk_embed_dim=256, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal, dilation=1)
         self.conv_block_4_other = self._build_blocks(num_blocks=X, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal)
-        # repeat blocks
-        # n x B x T => n x B x T
-        #spk_embed_dim=400
-        #self.repeats = self._build_repeats(
-        #    R,
-        #    X,
-        #    in_channels=B,
-        #    conv_channels=H,
-        #    kernel_size=P,
-        #    norm=norm,
-        #    causal=causal)
-
+        
+        # Multi-scale Decoder
         # output 1x1 conv
         # n x B x T => n x N x T
         # NOTE: using ModuleList not python list
@@ -363,82 +331,24 @@ class ConvTasNet(nn.Module):
         self.mask1 = Conv1D(B, N, 1)
         self.mask2 = Conv1D(B, N, 1)
         self.mask3 = Conv1D(B, N, 1)
+        
         # using ConvTrans1D: n x N x T => n x 1 x To
         # To = (T - 1) * L // 2 + L
         self.decoder_1d_1 = ConvTrans1D(N, 1, kernel_size=L, stride=L // 2, bias=True)
         self.decoder_1d_2 = ConvTrans1D(N, 1, kernel_size=80, stride=L // 2, bias=True)
         self.decoder_1d_3 = ConvTrans1D(N, 1, kernel_size=160, stride=L // 2, bias=True)
-        self.num_spks = num_spks
+        #self.num_spks = num_spks
 
-        ####################################
-        # Aux network part
-        #self.lstm = getattr(nn, 'LSTM')(60, 256, 1, batch_first=True, dropout=0.5, bidirectional=True)
-        ## lstm_dim * 2 if bidirectional else lstm_dim, linear_dim
-        #self.linear1 = nn.Linear(2*256,256)
-        #self.non_linear1 = supported_nonlinear[non_linear]
-        #self.linear2 = nn.Linear(256,400)
-        #self.pred_linear = nn.Linear(400,101)
-        #self.drops = th.nn.Dropout(p=0.5)
-
-        self.pred_linear = nn.Linear(256,101)
-        
-        #self.aux_encoder_1d_short = Conv1D(1, N, L, stride=L // 2, padding=0)
-        self.sinc_encoder_1d_short = Sinc_Conv1D(in_channels=1, out_channels=N, kernel_size=L, stride=L // 2, padding=0)
-        self.aux_ln = ChannelWiseLayerNorm(N)
-        self.aux_proj = Conv1D(N, B, 1)
-        self.aux_conv_block = Conv1DBlock(in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal, dilation=1)
-        self.aux_conv_block_other = self._build_blocks(num_blocks=4, in_channels=B, conv_channels=H, kernel_size=P, norm=norm, causal=causal)
-
-        # using more simpler CNN network
-        # method 1
-        self.aux_enc = nn.Sequential(
-            Conv1D(1, 256, L, stride=L // 2, padding=0),
-            nn.ReLU(),
-            ChannelWiseLayerNorm(256),
-            Conv1D(256, 256, 1),
-            Conv1D(256, 256, 1),
-            nn.BatchNorm1d(256),
-            nn.PReLU(),
-            nn.MaxPool1d(2),
-            Conv1D(256, 512, 1),
-            nn.BatchNorm1d(512),
-            nn.PReLU(),
-            nn.MaxPool1d(2),
-            Conv1D(512, 1024, 1),
-            nn.BatchNorm1d(1024),
-            nn.PReLU(),
-            nn.MaxPool1d(2),
-            Conv1D(1024, 256, 1),
-            #nn.Linear(1024, 512),
-            #nn.PReLU(),
-            #nn.Dropout(0.5),
-            #nn.Linear(512, 256),
-        )   
-
-        # method 2
-        #self.aux_enc2 = nn.Sequential(
-        #    Conv1D(1, 256, L, stride=L // 2, padding=0),
-        #    nn.ReLU(),
-        #    ChannelWiseLayerNorm(256),
-        #    Conv1D(256, 256, 1),
-        #    Residual_block(nb_filts = [256,256], first=True),
-        #)
-
-        # method 3
-        #self.aux_encoder_1d_short = Conv1D(1, N, L, stride=L // 2, padding=0)
-        #self.aux_encoder_1d_middle = Conv1D(1, N, 80, stride=L // 2, padding=0)
-        #self.aux_encoder_1d_long = Conv1D(1, N, 160, stride=L // 2, padding=0)
-    
+        # Speaker Encoder
         self.aux_enc3 = nn.Sequential(
-            #Conv1D(1, 256, L, stride=L // 2, padding=0),
-            #nn.ReLU(),
             ChannelWiseLayerNorm(3*256),
             Conv1D(3*256, 256, 1),
             ResBlock(256, 256),
             ResBlock(256, 512),
             ResBlock(512, 512),
             Conv1D(512, 256, 1),
-       )
+        )
+        self.pred_linear = nn.Linear(256,101)
 
     def flatten_parameters(self):
         self.lstm.flatten_parameters()    
@@ -447,7 +357,6 @@ class ConvTasNet(nn.Module):
         """
         Build Conv1D block
         """
-        #first_block = Conv1DBlock_v2(spk_embed_dim=spk_embed_dim, **block_kwargs, dilation=1)
         blocks = [
             Conv1DBlock(**block_kwargs, dilation=(2**b))
             for b in range(1,num_blocks)
@@ -473,32 +382,21 @@ class ConvTasNet(nn.Module):
         if x.dim() == 1:
             x = th.unsqueeze(x, 0)
         
-        # padding signal
-        
-
-        # n x 1 x S => n x N x T
+        # Multi-scale Encoder (Mixture audio input)
         w1 = F.relu(self.encoder_1d_short(x))
-
         T = w1.shape[-1]
         xlen1 = x.shape[-1]
         xlen2 = (T - 1) * (self.L1 // 2) + self.L2
         xlen3 = (T - 1) * (self.L1 // 2) + self.L3
         w2 = F.relu(self.encoder_1d_middle(F.pad(x, (0, xlen2 - xlen1), "constant", 0)))
         w3 = F.relu(self.encoder_1d_long(F.pad(x, (0, xlen3 - xlen1), "constant", 0)))
-        #print(w1.shape)
-        #print(w2.shape)
-        #print(w3.shape)
         # n x 3N x T
-        #y = th.cat([self.ln(w1), self.ln(w2), self.ln(w3)], 1)
-        # update norm+concate --> concate+norm
         y = self.ln(th.cat([w1, w2, w3], 1))
         # n x B x T
-        #y = self.proj(self.ln(w1))
         y = self.proj(y)
         
-        # aux net part (share params in encoder part)
+        # Multi-scale Encoder (Reference audio input)
         aux_w1 = F.relu(self.encoder_1d_short(aux))
-
         aux_T_shape = aux_w1.shape[-1]
         aux_len1 = aux.shape[-1]
         aux_len2 = (aux_T_shape - 1) * (self.L1 // 2) + self.L2
@@ -506,17 +404,13 @@ class ConvTasNet(nn.Module):
         aux_w2 = F.relu(self.encoder_1d_middle(F.pad(aux, (0, aux_len2 - aux_len1), "constant", 0)))
         aux_w3 = F.relu(self.encoder_1d_long(F.pad(aux, (0, aux_len3 - aux_len1), "constant", 0)))
 
+        # Speaker Encoder
         aux = self.aux_enc3(th.cat([aux_w1, aux_w2, aux_w3], 1))        
-
-        # when we use the SincNet, the kernel size (L=10), will add to 11
         aux_T = (aux_len - self.L1) // (self.L1 // 2) + 1
         aux_T = ((aux_T // 3) // 3) // 3
-        #aux_T = ((aux_T // 2) // 2) // 2
-        #aux_T = (aux_len - (self.L1 + 1)) // (self.L1 // 2) + 1
-        #aux_T = (aux_len - self.L1) / (self.L1 // 2) + 1
         aux = th.sum(aux, -1)/aux_T.view(-1,1).float()
 
-        #print(aux.shape)
+        # Speaker Extractor
         y = self.conv_block_1(y, aux)
         y = self.conv_block_1_other(y)
         y = self.conv_block_2(y, aux)
@@ -526,32 +420,20 @@ class ConvTasNet(nn.Module):
         y = self.conv_block_4(y, aux)
         y = self.conv_block_4_other(y)
 
-        # n x B x T
-        #y = self.repeats(y)
-        # n x 2N x T
+        # Multi-scale Decoder
         m1 = self.non_linear(self.mask1(y))
         m2 = self.non_linear(self.mask2(y))
         m3 = self.non_linear(self.mask3(y))
-        # n x N x T
-        #if self.non_linear_type == "softmax":
-        ##    m = self.non_linear(th.stack(e, dim=0), dim=0)
-        #else:
-        #    m = self.non_linear(th.stack(e, dim=0))
-        # spks x [n x N x T]
         s1 = w1 * m1
         s2 = w2 * m2
         s3 = w3 * m3
-        print(xlen1)
-        print(xlen2)
-        print(xlen3)
-        # spks x n x S
+
         #return self.decoder_1d_1(s1, squeeze=True), self.decoder_1d_2(s2, squeeze=True)[:, :xlen1], self.decoder_1d_3(s3, squeeze=True)[:, :xlen1], self.pred_linear(aux)
         return self.decoder_1d_1(s1, squeeze=True).unsqueeze(0), self.decoder_1d_2(s2, squeeze=True).unsqueeze(0)[:, :xlen1], self.decoder_1d_3(s3, squeeze=True).unsqueeze(0)[:, :xlen1], self.pred_linear(aux)
 
 def foo_conv1d_block():
     nnet = Conv1DBlock(256, 512, 3, 20)
     print(param(nnet))
-
 
 def foo_layernorm():
     C, T = 256, 20
@@ -560,18 +442,13 @@ def foo_layernorm():
     nnet2 = nn.LayerNorm([C, T], elementwise_affine=False)
     print(param(nnet2, Mb=False))
 
-
 def foo_conv_tas_net():
     x = th.rand(4, 1000)
     nnet = ConvTasNet(norm="cLN", causal=False)
-    # print(nnet)
     print("ConvTasNet #param: {:.2f}".format(param(nnet)))
     x = nnet(x)
     s1 = x[0]
     print(s1.shape)
 
-
 if __name__ == "__main__":
     foo_conv_tas_net()
-    # foo_conv1d_block()
-    # foo_layernorm()
