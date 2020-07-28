@@ -342,4 +342,6 @@ class SiSnrTrainer(Trainer):
  
         ce = th.nn.CrossEntropyLoss()
         ce_loss = ce(spk_pred, egs["spk_idx"])
-        return snr_loss + 0.5 * ce_loss
+        #return snr_loss + 0.5 * ce_loss
+        # update the scale param to 1.0
+        return snr_loss + 1.0 * ce_loss
